@@ -24,6 +24,7 @@ def make_random_iteration(key, state, obs):
     return key, state, obs
 
 
+key, state, obs = make_random_iteration(key, state, obs)
 
 
 print("running a random agent in 100 parallel environments for 100k iteration:")
