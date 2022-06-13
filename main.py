@@ -24,6 +24,7 @@ def get_flags(config):
     flags.DEFINE_float('lr_actor', config.lr_actor, 'Learning Rate Actor')
 
     flags.DEFINE_integer('n_envs', config.n_envs, 'concurrent number of enviroments')
+    flags.DEFINE_integer('version', config.version, 'version of the env')
 
     flags.DEFINE_float('gamma', config.gamma, 'discount factor')
     flags.DEFINE_integer('max_iter', config.max_iter, 'number of iteration')
@@ -47,6 +48,7 @@ def flags2config(FLAGS, config):
     config.lr_policy = FLAGS.lr_policy
     config.lr_actor = FLAGS.lr_actor
     config.n_envs = FLAGS.n_envs
+    config.version = FLAGS.version
     config.gamma = FLAGS.gamma
     config.max_iter = FLAGS.max_iter
     config.beta_entropy = FLAGS.beta_entropy
@@ -71,7 +73,7 @@ N = 1_000
 seed = config.seed
 key = jax.random.PRNGKey(seed)
 
-state, obs, step, n_action = get(config.env_name, key = key, n_envs = N)
+state, obs, step, n_action = get(config.env_name, key = key, n_envs = N, version = config.version)
 rewards = jnp.zeros(N)
 dones = jnp.zeros(N)
 
