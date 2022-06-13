@@ -8,8 +8,8 @@ ASTERIX:
 observation space normal 10x10x4 where
 0) agent position
 1) enemy position 
-2) all trail
-3) gold
+2) all trails position
+3) gold position
 observation space Markovian 10x10x8 where
 4) at the position of the agent we represent the current spawn timer (spawn_timer/init_spawn_speed)
 5) at the position of the agent we represent the current spawn speed (spawn_speed/init_spawn_speed)
@@ -36,7 +36,15 @@ class EnvironmentState:
 
 
 
-def make_env(key, n_envs  = 1, version = 0,  only_step = False, markov = False, ramp_interval = 100, init_spawn_speed = 10, init_move_interval = 5):
+def make_env(key, n_envs  = 1, version = 0,  only_step = False, markov = False, ramp_interval = 100):
+
+    """"
+    version 1 modification: -
+    ramp interval: frames before increasing difficulty
+    """
+    init_spawn_speed = 10
+    init_move_interval = 5
+
     def get_normal_obs(state):
       obs = jnp.zeros((10,10,4))
       obs = obs.at[state.player_y,state.player_x,0].set(1)
@@ -76,19 +84,21 @@ def make_env(key, n_envs  = 1, version = 0,  only_step = False, markov = False, 
         entities = entities.at[y].set(jnp.where(free_slot, new_entity, entities[y]))
         return entities
     
-    def check_collision(entities, player_x, player_y):
+    def check_collision(entities, player_x, player_y, reward, done):
         #check if there is something in the agent position, then check if it is a valid entities
         possible_collision = entities[player_y - 1, 0] == player_x
         collision_object = entities[player_y - 1, 2]
-        collision = (collision_object >= 0)*(possible_collision >0)
+        collision = jnp.logical_and(collision_object >= 0, possible_collision >0)
         #check if it is gold
-        is_gold = collision*(collision_object == 1)
+        is_gold = jnp.logical_and(collision, collision_object == 1)
         #if is gold remove it
         entities = entities.at[player_y - 1, 2].set(entities[player_y - 1, 2]*(1 - is_gold) - 1*is_gold)
-        return entities, is_gold, collision*(1 - is_gold)
+
+        reward += is_gold
+        done = jnp.logical_or(done, jnp.logical_and(collision, jnp.logical_not(is_gold)))
+        return entities, reward, done
 
     def reset(key):
-      key, cars_key = jax.random.split(key)
       #entities: for every entities we have an array of size 3 [x position, dir, content]. The entities in entry i is in y position i + y
       #content: 1 gold, 0 enemy, -1 nothing
       entities = jnp.zeros((8,3), dtype = int).at[:,2].set(-1)
@@ -107,8 +117,8 @@ def make_env(key, n_envs  = 1, version = 0,  only_step = False, markov = False, 
 
         #spawn entities and reset timer
         key, entity_key = jax.random.split(state.key)
-        new_entities = jnp.where(state.spawn_timer == 0, spawn_entity(entity_key, state.entities), state.entities)
-        new_spawn_timer = state.spawn_timer + state.spawn_speed*(state.spawn_timer == 0)
+        entities = jnp.where(state.spawn_timer == 0, spawn_entity(entity_key, state.entities), state.entities)
+        spawn_timer = state.spawn_timer + state.spawn_speed*(state.spawn_timer == 0)
 
         #move the agent
         #        1
@@ -116,56 +126,51 @@ def make_env(key, n_envs  = 1, version = 0,  only_step = False, markov = False, 
         #   2 <-- A --> 0
         #        3
         #4: do nothing
-        new_player_x = (state.player_x + (action == 0)*(state.player_x < 9)        #move right if possible
+        player_x = (state.player_x + (action == 0)*(state.player_x < 9)        #move right if possible
                                         - (action == 2)*(state.player_x > 0))       #move left if possible
-        new_player_y = (state.player_y + (action == 3)*(state.player_y < 8)        #move right if possible
+        player_y = (state.player_y + (action == 3)*(state.player_y < 8)        #move right if possible
                                         - (action == 1)*(state.player_y > 1))       #move left if possible
         
         reward = jnp.array([0])
-        done = jnp.array([0])
+        done = jnp.array([False])
 
         #check collision
-        new_entities, new_reward, new_done = check_collision(new_entities, new_player_x, new_player_y)
-        reward += new_reward
-        done = jnp.logical_or(done, new_done)
+        entities, reward, done = check_collision(entities, player_x, player_y, reward, done)
 
         #update positions
 
         #check if the entities can move and if yes reset timer
         can_move = state.move_timer == 0
-        new_move_timer = state.move_timer + state.move_speed*(state.move_timer == 0)
+        move_timer = state.move_timer + state.move_speed*(state.move_timer == 0)
 
         #move the entities
-        new_entities = new_entities.at[:,0].add((new_entities[:,1]*2 - 1)*(new_entities[:,2] >= 0)*can_move)
+        entities = entities.at[:,0].add((entities[:,1]*2 - 1)*(entities[:,2] >= 0)*can_move)
 
         #remove the entities that exits the screen
-        overflow = (new_entities[:,0] < 0) + (new_entities[:,0] > 9)
-        new_entities = new_entities.at[:,2].set(new_entities[:,2]*(1 - overflow) - 1*overflow)
+        overflow = (entities[:,0] < 0) + (entities[:,0] > 9)
+        entities = entities.at[:,2].set(entities[:,2]*(1 - overflow) - 1*overflow)
 
         #check collision again
-        new_entities, new_reward, new_done = check_collision(new_entities, new_player_x, new_player_y)
-        reward += new_reward
-        done = jnp.logical_or(done, new_done)
-
+        entities, reward, done = check_collision(entities, player_x, player_y, reward, done)
 
         #update timer
-        new_spawn_timer -= 1
-        new_move_timer -= 1
+        spawn_timer -= 1
+        move_timer -= 1
 
         #check if is time to ramp difficulties
-        new_ramp_timer = state.ramp_timer - (state.ramp_timer >= 0)*jnp.logical_or(state.spawn_speed > 1, state.move_speed > 1)
+        ramp_timer = state.ramp_timer - (state.ramp_timer >= 0)*jnp.logical_or(state.spawn_speed > 1, state.move_speed > 1)
 
         #if yes increase speeds and reset index and track ramp index
-        new_move_speed = state.move_speed - (state.ramp_timer < 0)*(state.move_speed > 1)*(state.ramp_index % 2 == 1)
-        new_spawn_speed = state.spawn_speed - (state.ramp_timer < 0)*(state.spawn_speed > 1)
-        new_ramp_index = state.ramp_index + (state.ramp_timer < 0)
-        new_ramp_timer = new_ramp_timer*(state.ramp_timer >= 0) + ramp_interval*(state.ramp_timer < 0)
+        move_speed = state.move_speed - (state.ramp_timer < 0)*(state.move_speed > 1)*(state.ramp_index % 2 == 1)
+        spawn_speed = state.spawn_speed - (state.ramp_timer < 0)*(state.spawn_speed > 1)
+        ramp_index = state.ramp_index + (state.ramp_timer < 0)
+        ramp_timer = ramp_timer*(state.ramp_timer >= 0) + ramp_interval*(state.ramp_timer < 0)
 
         #build new state
-        new_state = EnvironmentState(new_player_x, new_player_y, new_entities, new_spawn_speed, new_spawn_timer, 
-                                     new_move_timer, new_move_speed, new_ramp_timer, new_ramp_index, key)
+        state = EnvironmentState(player_x, player_y, entities, spawn_speed, spawn_timer, 
+                                move_timer, move_speed, ramp_timer, ramp_index, key)
         #autoreset
-        state = jax.tree_map(lambda x,y: jnp.where(done,x,y),reset(key),new_state)  #autoreset
+        state = jax.tree_map(lambda x, y: jnp.where(done, x, y), reset(key), state)  #autoreset
 
         return state, get_obs(state), reward, done
       

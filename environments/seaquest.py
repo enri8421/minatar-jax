@@ -4,45 +4,51 @@ import jax
 from flax import struct
 
 """
-seaquest
-0-9 normal game
-markovian:
-10: d spawn timer
-11: d spawn speed
-12: e
-13  e
-14: 
-15 shot timer
-16: timers
-
-
+SEAQUEST: 
+observation space normal 10x10x4 where
+0) agent position
+1) agent trail position
+2) friendly bulllets position
+3) all trails position
+4) enemy bullets position
+5) fishes position
+6) enemy sub position
+7) oxygen left
+8) number of divers on board
+9) divers position
+observation space Markovian TO DO
 """
 
 @struct.dataclass
 class EnvironmentState:
-    oxygen: int
-    diver_count: int
-    sub_x: int
-    sub_y: int
-    sub_dir: int
-    bullets: jnp.array                 #array of dimention 2x9x10 containing the f bullets left/right
-    e_bullets: jnp.array               #array of dimention 2x8x10 containing the e bullets left/right
-    fish: jnp.array                    #array of dimention 3x2x8x10 containing 3 layer of fish left/right
-    e_sub: jnp.array                   #array of dimention 3x2x2x8x10 containing 3 layer of e subs, left/right containing shot and move timer      
+    oxygen: int                        #oxygen left
+    diver_count: int                   #number of divers on board
+    sub_x: int                         #agent x coordinate position
+    sub_y: int                         #agent y coordinate position
+    sub_dir: int                       #agent direction (weapon direction)
+    bullets: jnp.array                 #array of dimention 2x9x10 containing the f bullets right/left
+    e_bullets: jnp.array               #array of dimention 2x8x10 containing the e bullets right/left
+    fish: jnp.array                    #array of dimention 3x2x8x10 containing 3 layer of fish right/left
+    e_sub: jnp.array                   #array of dimention 3x2x2x8x10 containing 3 layer of e subs, right/left containing shot and move timer      
     divers: jnp.array                  #array of dimention 2x8x10 containing divers
-    e_spawn_speed: int                 
-    e_spawn_timer:int
-    d_spawn_timer: int
-    move_speed: int
-    ramp_index: int
-    shot_timer: int
-    surface: bool
-    where_to_spawn: int
+    e_spawn_speed: int                 #current value of frames beetwen two enemies spawn       
+    e_spawn_timer:int                  #frames before next enemy spawn
+    d_spawn_timer: int                 #frames before next diver spawn
+    move_speed: int                    #speed of the enemies
+    ramp_index: int                    #current level of difficulty
+    shot_timer: int                    #frames before agent can shot again
+    surface: bool                      #True if in the previous frame the agent was already on surface
+    where_to_spawn: int                #in wich layer put the next enemy
     key: jnp.array
 
 
 def make_env(key, n_envs = 1, version = 0, only_step = False, markov = False, max_oxygen = 200, shot_cool_down = 5):
-    
+    """
+    version 1 modification: fixed the bug where the agent can have a negative number of divers on board and fixed the bug
+    whenre in the last iteration we have -1 oxygen but the bar is full in the observation
+    max_oxygen: maximum number of frames under water before dying
+    shot_cool_down: frames between two consecutive shoot
+    """
 
     init_spawn_speed = 20
     diver_spawn_speed = 30
@@ -54,47 +60,47 @@ def make_env(key, n_envs = 1, version = 0, only_step = False, markov = False, ma
 
     def get_obs(state):
         obs = jnp.zeros((10,10,10))
-        obs = obs.at[state.sub_y,state.sub_x,0].set(1)
+        obs = obs.at[state.sub_y, state.sub_x, 0].set(1)
         back_x = state.sub_x - 2*state.sub_dir + 1
-        obs = obs.at[state.sub_y,back_x,1].set(1)
+        obs = obs.at[state.sub_y, back_x, 1].set(1)
 
         if version == 0:
             oxygen_to_display = state.oxygen*10//max_oxygen
             oxygen_to_display = oxygen_to_display*(oxygen_to_display >= 0) + 9*(oxygen_to_display < 0)
-            obs = obs.at[9,:, 7].set(jnp.where(jnp.arange(10) < oxygen_to_display, 1, 0))
+            obs = obs.at[9, :, 7].set(jnp.where(jnp.arange(10) < oxygen_to_display, 1, 0))
         if version == 1:
-            obs = obs.at[9,:, 7].set(jnp.where(jnp.arange(10) < state.oxygen*10//max_oxygen, 1, 0))
+            obs = obs.at[9, :, 7].set(jnp.where(jnp.arange(10) < state.oxygen*10//max_oxygen, 1, 0))
 
         obs = obs.at[9,3:9,8].set(jnp.where(jnp.arange(max_divers) >= max_divers - state.diver_count, 1, 0))
 
-        obs = obs.at[:9,:,2].set(jnp.sum(state.bullets, axis = 0) > 0)
-        obs = obs.at[1:9,:,4].set(jnp.sum(state.e_bullets, axis = 0) > 0)
-        obs = obs.at[1:9,:,5].set(jnp.sum(state.fish, axis = (0,1)) > 0)
-        obs = obs.at[1:9,:,6].set(jnp.sum(state.e_sub[:,:,0], axis = (0,1)) > 0)
-        obs = obs.at[1:9,:,9].set(jnp.sum(state.divers, axis = 0) > 0)
+        obs = obs.at[:9, :, 2].set(jnp.sum(state.bullets, axis = 0) > 0)
+        obs = obs.at[1:9, :, 4].set(jnp.sum(state.e_bullets, axis = 0) > 0)
+        obs = obs.at[1:9,:, 5].set(jnp.sum(state.fish, axis = (0, 1)) > 0)
+        obs = obs.at[1:9, :, 6].set(jnp.sum(state.e_sub[:, :, 0], axis = (0, 1)) > 0)
+        obs = obs.at[1:9, :, 9].set(jnp.sum(state.divers, axis = 0) > 0)
 
 
-        all_object_l = jnp.logical_or(jnp.logical_or(jnp.sum(state.fish[:,1], axis = 0),jnp.sum(state.e_sub[:,1,0], axis = 0)), state.divers[1])
-        trails_l = jnp.roll(all_object_l.at[:,9].set(0), 1, 1)
-        all_object_r = jnp.logical_or(jnp.logical_or(jnp.sum(state.fish[:,0], axis = 0),jnp.sum(state.e_sub[:,0,0], axis = 0)), state.divers[0])
-        trails_r = jnp.roll(all_object_r.at[:,0].set(0), -1, 1)
-        obs = obs.at[1:9,:,3].set(jnp.logical_or(trails_l,trails_r))
+        all_object_l = jnp.logical_or(jnp.logical_or(jnp.sum(state.fish[:, 1], axis = 0),jnp.sum(state.e_sub[:, 1, 0], axis = 0)), state.divers[1])
+        trails_l = jnp.roll(all_object_l.at[:, 9].set(0), 1, 1)
+        all_object_r = jnp.logical_or(jnp.logical_or(jnp.sum(state.fish[:, 0], axis = 0),jnp.sum(state.e_sub[:, 0, 0], axis = 0)), state.divers[0])
+        trails_r = jnp.roll(all_object_r.at[:, 0].set(0), -1, 1)
+        obs = obs.at[1:9, :, 3].set(jnp.logical_or(trails_l,trails_r))
         
         return obs
     
     def reset(key):
 
-        state = EnvironmentState(jnp.array([max_oxygen]), jnp.array([0]), jnp.array([5]), jnp.array([0]), jnp.array([0]), jnp.zeros((2,9,10), dtype = int),
-                                 jnp.zeros((2,8,10), dtype = int), jnp.zeros((3,2,8,10), dtype = int), jnp.zeros((3,2,2,8,10), dtype = int), jnp.zeros((2,8,10), dtype = int),
-                                 jnp.array([init_spawn_speed]), jnp.array([init_spawn_speed]), jnp.array([diver_spawn_speed]), jnp.array([init_move_interval]), 
-                                 jnp.array([0]), jnp.array([0]), jnp.array([True]), jnp.array([0]), key)
+        state = EnvironmentState(jnp.array([max_oxygen]), jnp.array([0]), jnp.array([5]), jnp.array([0]), jnp.array([0]), jnp.zeros((2 ,9, 10), dtype = int),
+                                 jnp.zeros((2, 8, 10), dtype = int), jnp.zeros((3, 2, 8, 10), dtype = int), jnp.zeros((3, 2, 2, 8, 10), dtype = int), 
+                                 jnp.zeros((2, 8, 10), dtype = int), jnp.array([init_spawn_speed]), jnp.array([init_spawn_speed]), jnp.array([diver_spawn_speed]),
+                                 jnp.array([init_move_interval]), jnp.array([0]), jnp.array([0]), jnp.array([True]), jnp.array([0]), key)
         return state
 
     vec_reset = vmap(reset, in_axes=0, out_axes = 0)
     vec_get_obs =vmap(get_obs, in_axes=0, out_axes = 0)
 
 
-    def spaw_enemy(key, fish, e_sub,  e_spawn_timer, where_to_spawn, e_spawn_speed, move_speed, rs):
+    def spaw_enemy(key, fish, e_sub,  e_spawn_timer, where_to_spawn, e_spawn_speed, move_speed):
         #check if it can be spawn and if yes reset timer, then update also layer position
         ready_to_spawn = (e_spawn_timer == 0)
         e_spawn_timer += e_spawn_speed*ready_to_spawn
@@ -102,10 +108,10 @@ def make_env(key, n_envs = 1, version = 0, only_step = False, markov = False, ma
 
         #drawn direction, initial position, type and row
         key_dir, key_sub, key_pos = jax.random.split(key, 3)
-        e_goes_l =  rs[1] #jax.random.bernoulli(key_dir)
+        e_goes_l =  jax.random.bernoulli(key_dir)
         x = 9*e_goes_l
-        is_sub = rs[2] # jax.random.bernoulli(key_sub)
-        y = jnp.array([rs[0]]) - 1 #jax.random.randint(key, shape = (1,), minval= 0, maxval=8)
+        is_sub = jax.random.bernoulli(key_sub)
+        y = jax.random.randint(key_pos, shape = (1,), minval= 0, maxval = 8)
 
         #check that there are not enemy in oposite direction
         not_occupied =  1 - jnp.logical_or(jnp.sum(fish[:, 1 - e_goes_l, y]), jnp.sum(e_sub[:,1 - e_goes_l, 0, y]))
@@ -115,13 +121,13 @@ def make_env(key, n_envs = 1, version = 0, only_step = False, markov = False, ma
         spawn_fish = jnp.logical_and(1 - is_sub, jnp.logical_and(ready_to_spawn, not_occupied))
 
         #add new object if we can in the corrisponding place 
-        e_sub = e_sub.at[where_to_spawn, e_goes_l, 0, y, x].add(jnp.where(spawn_sub, move_speed + 1, 0))
-        e_sub = e_sub.at[where_to_spawn, e_goes_l, 1, y, x].add(jnp.where(spawn_sub, enemy_shot_interval + 1,  0))
-        fish =  fish.at[where_to_spawn, e_goes_l, y, x].add(jnp.where(spawn_fish, move_speed + 1, 0))
+        e_sub = e_sub.at[where_to_spawn, 1*e_goes_l, 0, y, x].add(jnp.where(spawn_sub, move_speed + 1, 0))
+        e_sub = e_sub.at[where_to_spawn, 1*e_goes_l, 1, y, x].add(jnp.where(spawn_sub, enemy_shot_interval + 1,  0))
+        fish =  fish.at[where_to_spawn, 1*e_goes_l, y, x].add(jnp.where(spawn_fish, move_speed + 1, 0))
 
         return fish, e_sub, e_spawn_timer, where_to_spawn
     
-    def spawn_diver(key, divers, d_spawn_timer, rs):
+    def spawn_diver(key, divers, d_spawn_timer):
 
         key_dir, key_pos = jax.random.split(key, 2)
 
@@ -131,13 +137,13 @@ def make_env(key, n_envs = 1, version = 0, only_step = False, markov = False, ma
 
         #draw direction, initial position and row
         key_dir, key_pos = jax.random.split(key, 2)
-        d_goes_l = rs[1] #jax.random.bernoulli(key_dir)
+        d_goes_l = jax.random.bernoulli(key_dir)
         x = 9*d_goes_l
-        y = jnp.array([rs[0]]) -1 #jax.random.randint(key, shape = (1,), minval= 0, maxval=8)
+        y = jax.random.randint(key_pos, shape = (1,), minval= 0, maxval=8)
 
 
         #add diver in the corrisponding place according to direction if we can according to timer
-        divers = divers.at[d_goes_l, y, x].add(jnp.where(ready_to_spawn, diver_move_interval + 1, 0))
+        divers = divers.at[1*d_goes_l, y, x].add(jnp.where(ready_to_spawn, diver_move_interval + 1, 0))
 
         return divers, d_spawn_timer
 
@@ -240,7 +246,7 @@ def make_env(key, n_envs = 1, version = 0, only_step = False, markov = False, ma
     def enemy_kill_aget(fish, e_sub, e_bullets, x, y):
         return jnp.logical_and(y > 0, jnp.logical_or(jnp.logical_or(jnp.sum(fish[:,:, y - 1, x]), jnp.sum(e_sub[:,:,0, y - 1, x])), jnp.sum(e_bullets[:, y - 1, x])))
 
-    def step(state, action, rs_e, rs_d):
+    def step(state, action):
 
         key, key_spawn_e, key_spawn_d = jax.random.split(state.key, 3)
         done = jnp.array([False])
@@ -249,9 +255,9 @@ def make_env(key, n_envs = 1, version = 0, only_step = False, markov = False, ma
 
         #spawn enemy
         fish, e_sub, e_spawn_timer, where_to_spawn = spaw_enemy(key_spawn_e, state.fish, state.e_sub,  state.e_spawn_timer, 
-                                                                state.where_to_spawn, state.e_spawn_speed, state.move_speed, rs_e)
+                                                                state.where_to_spawn, state.e_spawn_speed, state.move_speed)
         #spawn diver
-        divers, d_spawn_timer = spawn_diver(key_spawn_d, state.divers, state.d_spawn_timer, rs_d)
+        divers, d_spawn_timer = spawn_diver(key_spawn_d, state.divers, state.d_spawn_timer)
 
 
         #move the agent and update direction
