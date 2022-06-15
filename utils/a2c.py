@@ -131,7 +131,7 @@ def track_performance(performance_tracker, reward, done):
 def build_update(key, config):
 
     key, env_key = jax.random.split(key)
-    internal_state, obs, step, n_action = get(config.env_name, key = env_key, n_envs = config.n_envs, version = config.version)
+    internal_state, obs, step, n_action = get(config.env_name, sparse_rewards = config.sparse_rewards, key = env_key, n_envs = config.n_envs, version = config.version)
 
     state = Environment(internal_state, obs)
 

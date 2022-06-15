@@ -4,6 +4,7 @@ class default(object):
 
     env_name = "breakout"
     version = 0
+    sparse_rewards = False
 
     seed = 423
 
