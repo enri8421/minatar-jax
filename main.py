@@ -35,6 +35,7 @@ def get_flags(config):
 
     flags.DEFINE_bool('verbose', config.verbose, 'plot performance during training' )
     flags.DEFINE_bool('sparse_rewards', config.sparse_rewards, 'incorporate the rewards in the obs' )
+    flags.DEFINE_bool('markov', config.markov, 'use complete observation' )
 
     flags.DEFINE_string('env_name', config.env_name, 'environment')
 
@@ -52,6 +53,7 @@ def flags2config(FLAGS, config):
     config.version = FLAGS.version
     config.sparse_rewards = FLAGS.sparse_rewards
     config.gamma = FLAGS.gamma
+    config.markov = FLAGS.markov
     config.max_iter = FLAGS.max_iter
     config.beta_entropy = FLAGS.beta_entropy
     config.max_2_norm_grad = FLAGS.max_2_norm_grad
@@ -75,7 +77,7 @@ N = 1_000
 seed = config.seed
 key = jax.random.PRNGKey(seed)
 
-state, obs, step, n_action = get(config.env_name, sparse_rewards = config.sparse_rewards, key = key, n_envs = N, version = config.version)
+state, obs, step, n_action = get(config.env_name, sparse_rewards = config.sparse_rewards, key = key, n_envs = N, version = config.version, markov = config.markov)
 rewards = jnp.zeros(N)
 dones = jnp.zeros(N)
 
