@@ -5,12 +5,12 @@ import jax.numpy as jnp
 from jax import jit
 import jax
 
-from  environments.build_environment import get
 from utils.configuration import default
-from utils.a2c import train
+from utils.train import Trainer
+import time
 
 
-
+"""
 os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.9"
 #os.environ['TF_CUDNN_DETERMINISTIC']='1'
 
@@ -96,3 +96,27 @@ while(not (dones > 0).all()):
   key,state,obs,rewards,dones = iteration(key,state,obs,rewards,dones)
 
 print(f"avg performance after {config.max_iter*config.n_envs} frames in {config.env_name} is {jnp.mean(rewards)}")
+"""
+
+key = jax.random.PRNGKey(0)
+env_name = "seaquest"
+
+config = default(env_name)
+
+trainer = Trainer(key, config)
+
+print("start training...")
+s = time.time()
+
+trainer.train()
+
+print("train finished in ", time.time() - s, "s")
+
+print("start testing...")
+
+
+score = trainer.test()
+
+
+
+print(f"avg performance after {config.max_iter*config.n_envs} frames in {config.env_name} is {score}")

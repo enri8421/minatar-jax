@@ -1,27 +1,26 @@
 import jax.numpy as jnp
-from jax import vmap, jit
 import jax
 from flax import struct
+from functools import partial
 
 """
 ASTERIX: 
-observation space normal 10x10x4 where
+observation space 10x10x4 where
 0) agent position
 1) enemy position 
 2) all trails position
 3) gold position
-observation space Markovian 10x10x8 where
-4) at the position of the agent we represent the current spawn timer (spawn_timer/init_spawn_speed)
-5) at the position of the agent we represent the current spawn speed (spawn_speed/init_spawn_speed)
-6) at the position of the entities we rapresent the timer untill next move (state.move_timer/init_move_interval)
-7) we rapresent the current alien_move_interval  (state.move_speed/init_move_interval)
-8) the current ramp interval (ramp_timer/ramp_interval)
+
+
+version 1 modification: -
+ramp interval: frames before increasing difficulty
+
 """
 
 
 
 @struct.dataclass
-class EnvironmentState:
+class asterixState:
     player_x: int            #the x position of the agent
     player_y: int            #the y position of the agent
     entities: jnp.array      #array of size 8x3 containing the entities, one for each row
@@ -33,43 +32,54 @@ class EnvironmentState:
     ramp_index: int          #current level of difficulty
     key: jnp.array           #environment key
 
+class asterix:
+    def __init__(self, key, n_envs = 1, version = 0, ramp_interval = 100):
+
+        self.key = key
+        self.n_envs = n_envs
+        self.version = version
+
+        self.init_spawn_speed = 10
+        self.init_move_interval = 5
+        self.ramp_interval = ramp_interval
+
+        self.obs_shape = (10, 10, 4)
+        self.n_actions = 5
 
 
-
-def make_env(key, n_envs  = 1, version = 0,  only_step = False, markov = False, ramp_interval = 100):
-
-    """"
-    version 1 modification: -
-    ramp interval: frames before increasing difficulty
-    """
-    init_spawn_speed = 10
-    init_move_interval = 5
-
-    def get_normal_obs(state):
-      obs = jnp.zeros((10,10,4))
-      obs = obs.at[state.player_y,state.player_x,0].set(1)
-      obs = obs.at[jnp.arange(1,9),state.entities[:,0], 1].set(state.entities[:,2] == 0)
-      obs = obs.at[jnp.arange(1,9),state.entities[:,0], 3].set(state.entities[:,2] == 1)
-      back_x = state.entities[:,0] - 2*state.entities[:,1] + 1
-      back_not_overflow = (back_x >= 0)*(back_x <= 9)
-      obs = obs.at[jnp.arange(1,9), back_x, 2].set(back_not_overflow*(state.entities[:,2] >= 0), mode = "drop")
-      return obs
-    
-    def get_obs(state):
-        if markov:
-            obs = jnp.zeros((10,10,8))
-            obs = obs.at[:,:,:4].set(get_normal_obs(state))
-            obs = obs.at[state.player_y,state.player_x,4].set(state.spawn_timer/state.spawn_speed)
-            obs = obs.at[jnp.arange(1,9),state.entities[:,0],5].set(state.move_timer/state.move_speed)
-            obs = obs.at[state.player_y,state.player_x,6].set((state.ramp_timer + 1)/(ramp_interval + 1))
-            obs = obs.at[state.player_y,state.player_x,7].set(state.ramp_index/max(init_spawn_speed,2*init_move_interval))
-        
-        else:
-            obs = get_normal_obs(state)
-
+    def get_obs(self, state):
+        obs = jnp.zeros((10,10,4))
+        obs = obs.at[state.player_y,state.player_x,0].set(1)
+        obs = obs.at[jnp.arange(1,9),state.entities[:,0], 1].set(state.entities[:,2] == 0)
+        obs = obs.at[jnp.arange(1,9),state.entities[:,0], 3].set(state.entities[:,2] == 1)
+        back_x = state.entities[:,0] - 2*state.entities[:,1] + 1
+        back_not_overflow = (back_x >= 0)*(back_x <= 9)
+        obs = obs.at[jnp.arange(1,9), back_x, 2].set(back_not_overflow*(state.entities[:,2] >= 0), mode = "drop")
         return obs
 
-    def spawn_entity(key, entities):
+    def reset_state(self, key):
+        #entities: for every entities we have an array of size 3 [x position, dir, content]. The entities in entry i is in y position i + y
+        #content: 1 gold, 0 enemy, -1 nothing
+        entities = jnp.zeros((8,3), dtype = int).at[:,2].set(-1)
+
+        state = asterixState(jnp.array([5]), jnp.array([5]), entities, jnp.array([self.init_spawn_speed]), jnp.array([self.init_spawn_speed]),  
+                                jnp.array([self.init_move_interval]), jnp.array([self.init_move_interval]), jnp.array([self.ramp_interval]), jnp.array([0]), key)
+        return state
+
+
+    @partial(jax.vmap, in_axes=(None, 0), out_axes = 0)
+    def get_initial_obs(self, key):
+        initial_state = self.reset_state(key)
+        initial_obs = self.get_obs(initial_state)
+        return initial_state, initial_obs
+
+
+    def reset(self):
+        self.key, reset_key = jax.random.split(self.key)
+        reset_keys = jax.random.split(reset_key, self.n_envs)
+        return self.get_initial_obs(reset_keys)
+
+    def spawn_entity(self, key, entities):
         key_y, key_dir, key_is_gold = jax.random.split(key, 3)
         #decide if new new entities is gold and direction
         dir = jax.random.bernoulli(key_dir)
@@ -84,7 +94,7 @@ def make_env(key, n_envs  = 1, version = 0,  only_step = False, markov = False, 
         entities = entities.at[y].set(jnp.where(free_slot, new_entity, entities[y]))
         return entities
     
-    def check_collision(entities, player_x, player_y, reward, done):
+    def check_collision(self, entities, player_x, player_y, reward, done):
         #check if there is something in the agent position, then check if it is a valid entities
         possible_collision = entities[player_y - 1, 0] == player_x
         collision_object = entities[player_y - 1, 2]
@@ -98,26 +108,12 @@ def make_env(key, n_envs  = 1, version = 0,  only_step = False, markov = False, 
         done = jnp.logical_or(done, jnp.logical_and(collision, jnp.logical_not(is_gold)))
         return entities, reward, done
 
-    def reset(key):
-      #entities: for every entities we have an array of size 3 [x position, dir, content]. The entities in entry i is in y position i + y
-      #content: 1 gold, 0 enemy, -1 nothing
-      entities = jnp.zeros((8,3), dtype = int).at[:,2].set(-1)
 
-      state = EnvironmentState(jnp.array([5]), jnp.array([5]), entities, jnp.array([init_spawn_speed]), jnp.array([init_spawn_speed]),  
-                               jnp.array([init_move_interval]), jnp.array([init_move_interval]), jnp.array([ramp_interval]), jnp.array([0]), key)
-      return state
-
-    vec_reset = vmap(reset,in_axes=0, out_axes = 0)
-    vec_get_obs =vmap(get_obs,in_axes=0, out_axes = 0)
-        
-    def step(state, action):
-
-
-
-
+    @partial(jax.vmap, in_axes=(None, 0, 0), out_axes = 0)
+    def step(self, state, action):
         #spawn entities and reset timer
         key, entity_key = jax.random.split(state.key)
-        entities = jnp.where(state.spawn_timer == 0, spawn_entity(entity_key, state.entities), state.entities)
+        entities = jnp.where(state.spawn_timer == 0, self.spawn_entity(entity_key, state.entities), state.entities)
         spawn_timer = state.spawn_timer + state.spawn_speed*(state.spawn_timer == 0)
 
         #move the agent
@@ -135,7 +131,7 @@ def make_env(key, n_envs  = 1, version = 0,  only_step = False, markov = False, 
         done = jnp.array([False])
 
         #check collision
-        entities, reward, done = check_collision(entities, player_x, player_y, reward, done)
+        entities, reward, done = self.check_collision(entities, player_x, player_y, reward, done)
 
         #update positions
 
@@ -151,7 +147,7 @@ def make_env(key, n_envs  = 1, version = 0,  only_step = False, markov = False, 
         entities = entities.at[:,2].set(entities[:,2]*(1 - overflow) - 1*overflow)
 
         #check collision again
-        entities, reward, done = check_collision(entities, player_x, player_y, reward, done)
+        entities, reward, done = self.check_collision(entities, player_x, player_y, reward, done)
 
         #update timer
         spawn_timer -= 1
@@ -164,23 +160,13 @@ def make_env(key, n_envs  = 1, version = 0,  only_step = False, markov = False, 
         move_speed = state.move_speed - (state.ramp_timer < 0)*(state.move_speed > 1)*(state.ramp_index % 2 == 1)
         spawn_speed = state.spawn_speed - (state.ramp_timer < 0)*(state.spawn_speed > 1)
         ramp_index = state.ramp_index + (state.ramp_timer < 0)
-        ramp_timer = ramp_timer*(state.ramp_timer >= 0) + ramp_interval*(state.ramp_timer < 0)
+        ramp_timer = ramp_timer*(state.ramp_timer >= 0) + self.ramp_interval*(state.ramp_timer < 0)
 
         #build new state
-        state = EnvironmentState(player_x, player_y, entities, spawn_speed, spawn_timer, 
+        state = asterixState(player_x, player_y, entities, spawn_speed, spawn_timer, 
                                 move_timer, move_speed, ramp_timer, ramp_index, key)
         #autoreset
-        state = jax.tree_map(lambda x, y: jnp.where(done, x, y), reset(key), state)  #autoreset
+        state = jax.tree_util.tree_map(lambda x, y: jnp.where(done, x, y), self.reset_state(state.key), state)
 
-        return state, get_obs(state), reward, done
-      
+        return state, self.get_obs(state), reward, done
 
-    if(only_step):
-        return step
-
-
-    jitstep = jit(vmap(step, in_axes=0, out_axes = 0))
-    keys = jax.random.split(key,n_envs)
-    state = vec_reset(keys)
-
-    return state, vec_get_obs(state), jitstep, 5

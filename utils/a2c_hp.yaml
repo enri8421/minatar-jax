@@ -1,0 +1,24 @@
+breakout:
+  lr_policy: 0.003
+  lr_value: 0.001
+  beta: 0.04
+
+space_invaders:
+  lr_policy: 0.002
+  lr_value: 0.0015
+  beta: 0.07
+
+asterix:
+  lr_policy: 0.002
+  lr_value: 0.002
+  beta: 0.07
+
+freeway:
+  lr_policy: 0.002
+  lr_value: 0.0001
+  beta: 0.01
+
+seaquest:
+  lr_policy: 0.002
+  lr_value: 0.0004
+  beta: 0.03

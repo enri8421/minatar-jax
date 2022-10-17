@@ -1,77 +1,100 @@
 import jax.numpy as jnp
-from jax import vmap, jit
 import jax
 from flax import struct
+from functools import partial
 
 
 """
 Breakout: 
-observation space normal 10x10x4 where
+observation space 10x10x4 where
 0) agent pad position
 1) ball position
 2) ball trail position
 3) bricks position
-observation space Markovian 10x10x4 (normal is already markovian)
+
+version 1 modification: added random start at the beginning and changed interaction with block corner
+block_probability: probability of each block to appear (default: 1)
+max_frames: maximum number of frames before endinding the game, None = inf
+
 """
 
 @struct.dataclass
-class EnvironmentState:
-  ball_x: int           #x coordinate of the ball
-  ball_y: int           #y coordinate of the ball
-  trail_x: int          #x trail coordinate of the ball
-  trail_y: int          #y trail coordinate of the ball
-  pad: int              #agent pad position
-  direction: int        #direction of the ball
-  bricks: jnp.array     #bricks map
-  key: jnp.array        #environment key
-  current_frame: int    #current frame of the game (used when max_frames is active)
-  no_strike: bool       #flag that does not allow the ball to destroy a block in two consecutive frames
+class breakoutState:
+    ball_x: int           #x coordinate of the ball
+    ball_y: int           #y coordinate of the ball
+    trail_x: int          #x trail coordinate of the ball
+    trail_y: int          #y trail coordinate of the ball
+    pad: int              #agent pad position
+    direction: int        #direction of the ball
+    bricks: jnp.array     #bricks map
+    key: jnp.array        #environment key
+    current_frame: int    #current frame of the game (used when max_frames is active)
+    no_strike: bool       #flag that does not allow the ball to destroy a block in two consecutive frames
                         #(present in the orginal version, deprecated in version one)
 
-def make_env(key, n_envs = 1, version = 0, only_step = False, markov = False, block_probability = 1, max_frames = None):
-    """
-    version 1 modification: added random start at the beginning and changed interaction with block corner
-    block_probability: probability of each block to appear (default: 1)
-    max_frames: maximum number of frames before endinding the game, None = inf
-    """
-    frames_limit = not max_frames is None
-    deterministic = block_probability == 1
 
-    def get_obs(state):
-        obs = jnp.zeros((10,10,4))
+class breakout:
+    def __init__(self, key, n_envs = 1, version = 0, block_probability = 1, max_frames = None):
+
+        self.key = key
+        self.n_envs = n_envs
+        self.version = version
+
+        self.frames_limit = not max_frames is None
+        self.max_frames = max_frames
+        self.deterministic = block_probability == 1
+        self.block_probability = block_probability
+
+        self.obs_shape = (10, 10, 4)
+        self.n_actions = 3
+
+
+    def get_obs(self, state):
+        obs = jnp.zeros((10, 10, 4))
         obs = obs.at[9, state.pad, 0].set(1)
         obs = obs.at[state.ball_y, state.ball_x, 1].set(1)
         obs = obs.at[state.trail_y, state.trail_x, 2].set(1)
         obs = obs.at[1:4, :, 3].set(state.bricks)
         return obs
 
-    def reset(key):
+    def reset_state(self, key):
         key, sample_key = jax.random.split(key)
         #initialize bricks
-        if deterministic:
+        if self.deterministic:
             bricks = jnp.ones((3, 10), dtype = int)
         else:
-            bricks = 1*jax.random.bernoulli(sample_key, block_probability, (3, 10))
+            bricks = 1*jax.random.bernoulli(sample_key, self.block_probability, (3, 10))
         
         #initialize positions
         initial_direction = jnp.array([jax.random.bernoulli(sample_key) + 2])
-        if version == 0:
+        if self.version == 0:
             initial_pos = jnp.array([jax.random.bernoulli(sample_key)*9])
             ball_y_initial = jnp.array([3])
-        if version == 1:
+        if self.version == 1:
             initial_pos = jax.random.randint(sample_key, (1,), 0, 8)
             ball_y_initial = jnp.array([4])
         
         #build initial state
-        state = EnvironmentState(initial_pos, ball_y_initial, initial_pos, jnp.array([3]), 
+        state = breakoutState(initial_pos, ball_y_initial, initial_pos, jnp.array([3]), 
                                  jnp.array([4]), initial_direction, bricks, key, jnp.array([0]), jnp.array([False]))
         return state
 
-    vec_reset = vmap(reset,in_axes=0, out_axes = 0)
-    vec_get_obs =vmap(get_obs,in_axes=0, out_axes = 0)
+
+    @partial(jax.vmap, in_axes=(None, 0), out_axes = 0)
+    def get_initial_obs(self, key):
+        initial_state = self.reset_state(key)
+        initial_obs = self.get_obs(initial_state)
+        return initial_state, initial_obs
 
 
-    def step(state,action):
+    def reset(self):
+        self.key, reset_key = jax.random.split(self.key)
+        reset_keys = jax.random.split(reset_key, self.n_envs)
+        return self.get_initial_obs(reset_keys)
+
+
+    @partial(jax.vmap, in_axes=(None, 0, 0), out_axes = 0)
+    def step(self, state, action):
 
         #move the pad
 
@@ -114,8 +137,10 @@ def make_env(key, n_envs = 1, version = 0, only_step = False, markov = False, bl
         hit_brick = state.bricks.at[(ball_y - 1)%10, ball_x].get(mode='fill', fill_value=0)*(1 - state.no_strike)
 
         #if version zero update no strike
-        if version == 0:
-            no_strike = state.bricks.at[(ball_y - 1)%10, ball_x].get(mode='fill', fill_value=0)
+        #and is taken to convert it to bool
+        #note: x in (0,1) ->  x and 1 == x
+        if self.version == 0:
+            no_strike = jnp.logical_and(state.bricks.at[(ball_y - 1)%10, ball_x].get(mode='fill', fill_value=0) , 1)
 
         #remove brick
         bricks = state.bricks.at[(ball_y - 1)%10, ball_x].add(- hit_brick.squeeze())
@@ -127,7 +152,7 @@ def make_env(key, n_envs = 1, version = 0, only_step = False, markov = False, bl
         # if the ball is still in one brick we have to invert again 
         #main modification of version one. When the ball hit a corner it goes back in the same
         #direction. That is a turn of 180 degree. This is why we have to invert the position two times
-        if version == 1:
+        if self.version == 1:
             no_strike = state.no_strike
             still_hit_brick = state.bricks.at[(ball_y - 1)%10, ball_x].get(mode='fill', fill_value=0)
             direction = direction + still_hit_brick*((direction%2 == 0) + (-1)*(direction%2 == 1))
@@ -147,25 +172,14 @@ def make_env(key, n_envs = 1, version = 0, only_step = False, markov = False, bl
 
         #check if episode is over
         fail = jnp.logical_and(last_line, jnp.logical_not(jnp.logical_or(ball_hit, trail_hit))) #fail if neither trail nor ball hit the pad
-        limite_reached = state.current_frame > max_frames if frames_limit else False
+        limite_reached = state.current_frame > self.max_frames if self.frames_limit else False
         done = jnp.logical_or(jnp.logical_or(fail, jnp.sum(bricks) == 0), limite_reached)
 
 
         #build new state
-        state = EnvironmentState(ball_x, ball_y, trail_x, trail_y, pad, direction, bricks, state.key, state.current_frame + 1, no_strike)
+        state = breakoutState(ball_x, ball_y, trail_x, trail_y, pad, direction, bricks, state.key, state.current_frame + 1, no_strike)
 
         #autoreset
-        state = jax.tree_map(lambda x, y: jnp.where(done, x, y), reset(state.key), state)
+        state = jax.tree_util.tree_map(lambda x, y: jnp.where(done, x, y), self.reset_state(state.key), state)
 
-        return state, get_obs(state), hit_brick, done
-
-
-    if(only_step):
-        return step
-
-
-    jitstep = jit(vmap(step, in_axes=0, out_axes = 0))
-    keys = jax.random.split(key,n_envs)
-    state = vec_reset(keys)
-
-    return state, vec_get_obs(state), jitstep, 3
+        return state, self.get_obs(state), hit_brick, done
