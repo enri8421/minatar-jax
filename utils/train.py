@@ -57,6 +57,7 @@ class Trainer:
         self.state = State(*self.train_env.reset())
         self.max_iter = config.max_iter
         self.T = config.T
+        self.max_timestep = config.max_timestep
 
     
     def make_train_env_step(self, state, action):
@@ -98,28 +99,33 @@ class Trainer:
         return Performance(new_rewards, new_dones)
 
 
-    def test_step(self, params, key, state, perfromance):
+    def test_step(self, params, key, state, perfromance, timestep):
         key, step_key = jax.random.split(key)
         action = self.agent.sample_action(step_key, params, state.obs, T = self.T)
         state, transition = self.make_test_env_step(state, action)
         perfromance = self.compute_performance(perfromance, transition)
-        return key, state, perfromance
+        return key, state, perfromance, timestep + 1
 
 
     def cond(self, val):
-        return jnp.sum(val[-1].dones) < self.N
+        return jnp.logical_and(jnp.sum(val[-2].dones) < self.N, val[-1] < self.max_timestep)
 
     partial(jax.jit, static_argnums=0)
     def test_jit(self, key, params, state):
         perfromance = Performance(jnp.zeros(self.N), jnp.full(self.N, False))
-        key, _, perfromance = jax.lax.while_loop(self.cond, lambda val: self.test_step(params, *val), (key, state, perfromance))
-        return key, jnp.mean(perfromance.rewards)
+        timestep = 0
+        key, _, perfromance, timestep  = jax.lax.while_loop(self.cond, lambda val: self.test_step(params, *val), (key, state, perfromance, timestep))
+        return key, jnp.mean(perfromance.rewards), timestep
 
 
         
     def test(self):
         initial_state = State(*self.test_env.reset())
-        self.key, score = self.test_jit(self.key, self.params, initial_state)
+        self.key, score, timestep = self.test_jit(self.key, self.params, initial_state)
+        if timestep >= self.max_timestep:
+            print(f"testing aborted after max number of step, performance so far is: {score}")
+        else:
+            print(f"performance is: {score}")
         return score
 
     

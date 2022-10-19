@@ -25,7 +25,8 @@ class default(object):
 
     gamma = 0.99
 
-    max_iter = 200_000
+    max_iter = 500_000
 
-    T = 1
+    T = 10
+    max_timestep = 50_000
 
