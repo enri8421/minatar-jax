@@ -1,0 +1,41 @@
+[project]
+name = "minatar-jax"
+version = "0.1.0"
+description = "Small MinAtar environments and an online actor-critic implemented in JAX."
+readme = "README.md"
+license = "GPL-3.0-only"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "jax>=0.4,<1",
+    "flax>=0.12,<1",
+    "optax>=0.2,<1",
+    "numpy>=2,<3",
+    "pydantic>=2.10,<3",
+    "pydantic-settings>=2.8,<3",
+    "pillow>=10,<13",
+]
+
+[dependency-groups]
+dev = [
+    "pyright==1.1.414",
+    "ruff==0.17.5",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+required-version = "==0.17.5"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["I"]
+
+[tool.ruff.format]
+line-ending = "lf"
+
+[tool.pyright]
+include = ["demo.py", "minatar_jax", "tests"]
+pythonVersion = "3.12"
+typeCheckingMode = "standard"
+reportUnnecessaryTypeIgnoreComment = true

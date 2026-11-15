@@ -1,0 +1,16 @@
+MinAtar JAX
+
+JAX implementation and modifications: Copyright (c) 2022–2026 Enrico Bianchi
+(enri8421).
+
+Based on MinAtar by Kenny Young and Tian Tian:
+https://github.com/kenjyoung/MinAtar
+
+Upstream MinAtar is distributed under the GNU General Public License version 3.
+This project is distributed under GPL-3.0-only; see LICENSE.
+
+The JAX port uses vectorized state transitions, explicit random keys, automatic
+resets, and configurable game variants. Infrastructure and compatibility changes
+were made on 2026-11-15. The functional API refactor also corrects Seaquest
+returning its old state rather than its newly computed state. This is a separate implementation; the upstream authors
+are not responsible for these modifications.
